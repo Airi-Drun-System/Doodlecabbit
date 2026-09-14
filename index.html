@@ -1,0 +1,291 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <!-- Мета-тег для запрета приближения и корректного масштаба на телефонах -->
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+    <title>Mobile Doodle Jump</title>
+    <style>
+        * {
+            box-sizing: border-box;
+            user-select: none;
+            -webkit-user-select: none;
+            touch-action: none; /* Отключает стандартные жесты браузера (зум, скролл) */
+        }
+        body {
+            margin: 0;
+            padding: 0;
+            background: #1a1a1a;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            height: 100vh;
+            font-family: system-ui, -apple-system, sans-serif;
+            overflow: hidden;
+        }
+        canvas {
+            background: linear-gradient(to bottom, #eef2f3, #8e9eab);
+            box-shadow: 0 10px 30px rgba(0,0,0,0.5);
+            max-width: 100%;
+            max-height: 100vh;
+            object-fit: contain; /* Идеально вписывает игру в экран любого телефона */
+        }
+    </style>
+</head>
+<body>
+
+<!-- Внутреннее разрешение холста фиксированное, браузер сам растянет его без потери пропорций -->
+<canvas id="game" width="480" height="800"></canvas>
+
+<script>
+const canvas = document.getElementById('game');
+const ctx = canvas.getContext('2d');
+
+// Загрузка модельки
+const heroImg = new Image();
+heroImg.src = 'hero.png';
+
+// Баланс физики под вертикальный экран
+const GRAVITY = 1350;          
+const BOUNCE_VELOCITY = -780;  
+const ACCELERATION = 2800;     
+const FRICTION = 8;            
+const MAX_SPEED_X = 500;       
+
+const player = {
+    x: 215,
+    y: 450,
+    width: 55,  
+    height: 55,
+    vx: 0,
+    vy: 0,
+    imgLoaded: false,
+    facingLeft: false 
+};
+
+heroImg.onload = () => { player.imgLoaded = true; };
+
+// Платформы
+let platforms = [];
+const platformWidth = 90; 
+const platformHeight = 18;
+
+function initPlatforms() {
+    platforms = [];
+    platforms.push({ x: 195, y: 700 }); // Стартовая под игроком
+    
+    for (let i = 1; i < 9; i++) {
+        platforms.push({
+            x: Math.random() * (canvas.width - platformWidth),
+            y: 700 - (i * 95)
+        });
+    }
+}
+
+// Переменные для мобильного управления
+let touchDirection = 0; // -1: влево, 1: вправо, 0: нет нажатия
+
+// --- СЛУШАТЕЛИ НАЖАТИЙ (ПК клавиатура) ---
+const keys = {};
+window.addEventListener('keydown', e => {
+    if (['Space', 'ArrowUp', 'ArrowDown'].includes(e.code)) e.preventDefault();
+    keys[e.code] = true;
+});
+window.addEventListener('keyup', e => keys[e.code] = false);
+
+// --- СЛУШАТЕЛИ ТАЧЕЙ (Смартфоны) ---
+function handleTouch(e) {
+    e.preventDefault();
+    if (gameOver) {
+        restartGame();
+        return;
+    }
+    
+    // Определяем, в какой половине экрана произошло нажатие относительно Canvas
+    const rect = canvas.getBoundingClientRect();
+    const touchX = e.touches[0].clientX - rect.left;
+    const canvasDisplayWidth = rect.width;
+
+    if (touchX < canvasDisplayWidth / 2) {
+        touchDirection = -1; // Левая сторона
+    } else {
+        touchDirection = 1;  // Правая сторона
+    }
+}
+
+window.addEventListener('touchstart', handleTouch, { passive: false });
+window.addEventListener('touchmove', handleTouch, { passive: false });
+window.addEventListener('touchend', e => {
+    e.preventDefault();
+    touchDirection = 0; // Отпустили экран — плавно тормозим
+}, { passive: false });
+
+let score = 0;
+let gameOver = false;
+let lastTime = performance.now();
+
+function update(dt) {
+    if (gameOver) return;
+
+    // Считываем намерение движения (и с ПК, и с телефона)
+    let moveIntent = touchDirection; 
+    if (keys['ArrowLeft'] || keys['KeyA']) moveIntent = -1;
+    if (keys['ArrowRight'] || keys['KeyD']) moveIntent = 1;
+
+    if (moveIntent !== 0) {
+        player.vx += moveIntent * ACCELERATION * dt;
+        player.facingLeft = moveIntent < 0;
+        if (player.vx > MAX_SPEED_X) player.vx = MAX_SPEED_X;
+        if (player.vx < -MAX_SPEED_X) player.vx = -MAX_SPEED_X;
+    } else {
+        player.vx -= player.vx * FRICTION * dt;
+        if (Math.abs(player.vx) < 1) player.vx = 0;
+    }
+
+    player.x += player.vx * dt;
+    player.vy += GRAVITY * dt;
+    player.y += player.vy * dt;
+
+    // Телепортация через края
+    if (player.x + player.width < 0) player.x = canvas.width;
+    if (player.x > canvas.width) player.x = -player.width;
+
+    // Коллизия с платформами
+    if (player.vy > 0) {
+        platforms.forEach(plat => {
+            if (
+                player.x + player.width * 0.8 > plat.x && 
+                player.x + player.width * 0.2 < plat.x + platformWidth &&
+                player.y + player.height >= plat.y &&
+                player.y + player.height <= plat.y + platformHeight + (player.vy * dt)
+            ) {
+                player.vy = BOUNCE_VELOCITY;
+                player.y = plat.y - player.height; 
+            }
+        });
+    }
+
+    // Скроллинг камеры
+    if (player.y < canvas.height * 0.4) {
+        let diff = (canvas.height * 0.4) - player.y;
+        score += Math.floor(diff);
+        
+        player.y += diff;
+        platforms.forEach(plat => {
+            plat.y += diff;
+            if (plat.y > canvas.height) {
+                plat.y -= 800; 
+                plat.x = Math.random() * (canvas.width - platformWidth);
+            }
+        });
+    }
+
+    // Проигрыш
+    if (player.y > canvas.height + 100) {
+        gameOver = true;
+    }
+}
+
+function draw() {
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+    // Отрисовка платформ
+    ctx.fillStyle = '#2ecc71';
+    platforms.forEach(plat => {
+        ctx.beginPath();
+        ctx.roundRect(plat.x, plat.y, platformWidth, platformHeight, 6);
+        ctx.fill();
+        
+        ctx.fillStyle = '#27ae60';
+        ctx.beginPath();
+        ctx.roundRect(plat.x, plat.y + 12, platformWidth, 6, {bottomLeft: 6, bottomRight: 6});
+        ctx.fill();
+        ctx.fillStyle = '#2ecc71';
+    });
+
+    // Отрисовка персонажа
+    ctx.save();
+    if (player.imgLoaded) {
+        if (player.facingLeft) {
+            ctx.scale(-1, 1);
+            ctx.drawImage(heroImg, -player.x - player.width, player.y, player.width, player.height);
+        } else {
+            ctx.drawImage(heroImg, player.x, player.y, player.width, player.height);
+        }
+    } else {
+        ctx.fillStyle = '#e74c3c';
+        ctx.beginPath();
+        ctx.roundRect(player.x, player.y, player.width, player.height, 8);
+        ctx.fill();
+        
+        ctx.fillStyle = '#fff';
+        let eyeOffset = player.facingLeft ? 10 : 32;
+        ctx.fillRect(player.x + eyeOffset, player.y + 15, 6, 9);
+        ctx.fillRect(player.x + eyeOffset + 12, player.y + 15, 6, 9);
+    }
+    ctx.restore();
+
+    // Интерфейс счета
+    ctx.fillStyle = '#2c3e50';
+    ctx.font = 'bold 24px system-ui';
+    ctx.fillText(`Счёт: ${score}`, 25, 45);
+
+    // Экран завершения игры
+    if (gameOver) {
+        ctx.fillStyle = 'rgba(44, 62, 80, 0.85)';
+        ctx.fillRect(0, 0, canvas.width, canvas.height);
+        
+        ctx.fillStyle = '#fff';
+        ctx.font = 'bold 36px system-ui';
+        ctx.textAlign = 'center';
+        ctx.fillText('ИГРА ОКОНЧЕНА', canvas.width / 2, canvas.height / 2 - 20);
+        
+        ctx.fillStyle = '#bdc3c7';
+        ctx.font = '20px system-ui';
+        ctx.fillText(`Ваш результат: ${score}`, canvas.width / 2, canvas.height / 2 + 25);
+        
+        ctx.fillStyle = '#2ecc71';
+        ctx.font = '600 16px system-ui';
+        // Универсальная надпись под ПК и мобилки
+        ctx.fillText('Тапните по экрану или Пробел', canvas.width / 2, canvas.height / 2 + 75);
+        ctx.fillText('для рестарта', canvas.width / 2, canvas.height / 2 + 105);
+        ctx.textAlign = 'left';
+    }
+}
+
+function restartGame() {
+    player.x = 215;
+    player.y = 450;
+    player.vx = 0;
+    player.vy = BOUNCE_VELOCITY;
+    score = 0;
+    gameOver = false;
+    touchDirection = 0;
+    initPlatforms();
+}
+
+function loop(currentTime) {
+    let dt = (currentTime - lastTime) / 1000;
+    if (dt > 0.1) dt = 0.1; 
+
+    lastTime = currentTime;
+
+    update(dt);
+    draw();
+    requestAnimationFrame(loop);
+}
+
+window.addEventListener('keydown', e => {
+    if (e.code === 'Space' && gameOver) {
+        restartGame();
+    }
+});
+
+initPlatforms();
+requestAnimationFrame((time) => {
+    lastTime = time;
+    loop(time);
+});
+</script>
+</body>
+</html>
